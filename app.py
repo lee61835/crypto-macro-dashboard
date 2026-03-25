@@ -132,7 +132,7 @@ if df is not None and not df.empty:
         fig_corr = go.Figure()
         fig_corr.add_trace(go.Scatter(x=df.index, y=df['Corr_DXY'], name='BTC vs DXY', line=dict(color='red')))
         fig_corr.add_trace(go.Scatter(x=df.index, y=df['Corr_Yield'], name='BTC vs Yields', line=dict(color='blue')))
-        fig_corr.add_hline(y=0, line_dash="dot", color="gray")
+        fig_corr.add_hline(y=0, line_dash="dot", line_color="gray")
         fig_corr.update_layout(height=400, yaxis_title="相关系数 (-1 到 1)")
         st.plotly_chart(fig_corr, use_container_width=True)
         st.caption("相关系数接近 -1 表示强负相关（正常情况），接近 1 表示异常正相关。")
