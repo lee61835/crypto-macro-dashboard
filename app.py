@@ -25,16 +25,12 @@ def get_data():
     try:
         # 1. 获取市场数据 (Yahoo Finance)
         # DX-Y.NYB: 美元指数期货, ^TNX: 10年期美债收益率, BTC-USD: 比特币
-        # 如果期货数据缺失，备用方案可以使用 UUP (美元ETF)
         tickers = ["DX-Y.NYB", "^TNX", "BTC-USD", "GLD"] 
         data = yf.download(tickers, period="2y", interval="1d", progress=False)['Close']
         
         # 重命名列
-                # 确保列顺序正确，避免错位
-        # 先检查哪些列存在
         available_cols = data.columns.tolist()
         
-        # 创建映射字典
         col_map = {
             'DX-Y.NYB': 'DXY',
             '^TNX': 'Nominal_Yield',
@@ -49,7 +45,6 @@ def get_data():
         # 如果缺少关键列，给出警告
         if 'DXY' not in data.columns:
             st.warning("⚠️ 未找到 DXY 数据，尝试使用 UUP 替代...")
-            # 可选：备用方案
         
         # 数据清洗：删除全为空的行
         data = data.dropna(how='all')
@@ -57,13 +52,7 @@ def get_data():
         # 向前填充：解决不同市场休市时间不一致导致的数据空缺
         data = data.ffill()
         
-        # 2. 模拟/计算实际利率 (Real Yields)
-        # 注意：FRED API 在云端免费层有时受限，这里使用一种通用的估算方法：
-        # 实际利率 ≈ 名义利率 (^TNX) - 通胀预期 (可以用 TIPS ETF 如 TIP 的价格变化率代理，或简化处理)
-        # 为了演示稳定性，我们直接使用 名义利率 作为主要压力指标，因为短期两者高度相关
-        # 如果有条件，可以加入 'TIP' ETF 数据来精确计算: Real = Nominal - Breakeven
-        
-        # 计算变化率
+        # 2. 计算变化率
         data['DXY_Change'] = data['DXY'].pct_change()
         data['Yield_Change'] = data['Nominal_Yield'].pct_change()
         
@@ -108,11 +97,12 @@ if df is not None and not df.empty:
     # --- 图表区域 ---
     tab1, tab2, tab3 = st.tabs(["📊 压力指数与价格", "🔗 相关性分析", "📉 详细数据表"])
 
-        with tab1:
-        # 1. 先定义列布局 (注意：这行要和 with tab1: 对齐)
+    # =======================
+    # TAB 1: 压力指数与价格 (已修复缩进和配色)
+    # =======================
+    with tab1:
         col_a, col_b = st.columns([2, 1])
         
-        # 2. 左侧大图 (注意：这行要和 col_a, col_b 对齐)
         with col_a:
             st.subheader("BTC 价格 vs 宏观压力分数 (红=紧缩/利空，绿=宽松/利好)")
             fig_main = go.Figure()
@@ -129,7 +119,7 @@ if df is not None and not df.empty:
                 )
             )
             
-            # 压力分数 (左轴，柱状图)
+            # 压力分数 (左轴，柱状图) - 【核心修改：红绿分明，不透明】
             colors = ['red' if x > 0 else 'green' if x < 0 else 'gray' for x in df['Stress_Score']]
             
             fig_main.add_trace(
@@ -155,7 +145,7 @@ if df is not None and not df.empty:
                 annotation_font_color="gray"
             )
 
-            # 动态计算 Y 轴范围
+            # 动态计算 Y 轴范围，让柱子高低变化更明显
             min_score = df['Stress_Score'].min()
             max_score = df['Stress_Score'].max()
             
@@ -186,23 +176,27 @@ if df is not None and not df.empty:
             
             st.plotly_chart(fig_main, use_container_width=True)
 
-        # 3. 右侧信号解读 (注意：这行要和 with col_a: 对齐)
         with col_b:
             st.subheader("🚨 最新信号解读")
-            latest = df.iloc[-1] # 确保获取最新数据
+            # 重新获取最新数据以防万一
+            current_latest = df.iloc[-1] 
             
-            if latest['Stress_Score'] >= 2:
+            if current_latest['Stress_Score'] >= 2:
                 st.error("**极度危险**: 美元与利率双升，资金大幅回流美国，加密资产承压极大。建议减仓或对冲。")
-            elif latest['Stress_Score'] <= -2:
+            elif current_latest['Stress_Score'] <= -2:
                 st.success("**黄金机会**: 美元与利率双降，流动性溢出，风险资产有望反弹。")
-            elif latest['Stress_Score'] > 0:
+            elif current_latest['Stress_Score'] > 0:
                 st.warning("**谨慎观望**: 宏观环境偏紧，不宜激进做多。")
             else:
                 st.info("**环境温和**: 宏观因素无明显方向，关注技术面。")
             
             st.markdown("---")
-            st.markdown(f"**DXY 趋势**: {'上涨 📈' if latest['Score_DXY']>0 else '下跌 📉'}")
-            st.markdown(f"**利率 趋势**: {'上升 🔼' if latest['Score_Yield']>0 else '下降 🔽'}")
+            st.markdown(f"**DXY 趋势**: {'上涨 📈' if current_latest['Score_DXY']>0 else '下跌 📉'}")
+            st.markdown(f"**利率 趋势**: {'上升 🔼' if current_latest['Score_Yield']>0 else '下降 🔽'}")
+
+    # =======================
+    # TAB 2: 相关性分析
+    # =======================
     with tab2:
         st.subheader("BTC 与宏观因子滚动相关性 (60天)")
         fig_corr = go.Figure()
@@ -213,6 +207,9 @@ if df is not None and not df.empty:
         st.plotly_chart(fig_corr, use_container_width=True)
         st.caption("相关系数接近 -1 表示强负相关（正常情况），接近 1 表示异常正相关。")
 
+    # =======================
+    # TAB 3: 详细数据表
+    # =======================
     with tab3:
         st.subheader("原始数据预览 (最近 30 天)")
         st.dataframe(df.tail(30)[['BTC', 'DXY', 'Nominal_Yield', 'Stress_Score']].sort_index(ascending=False), use_container_width=True)
