@@ -30,7 +30,26 @@ def get_data():
         data = yf.download(tickers, period="2y", interval="1d", progress=False)['Close']
         
         # 重命名列
-        data.columns = ["DXY", "Nominal_Yield", "BTC", "Gold"]
+                # 确保列顺序正确，避免错位
+        # 先检查哪些列存在
+        available_cols = data.columns.tolist()
+        
+        # 创建映射字典
+        col_map = {
+            'DX-Y.NYB': 'DXY',
+            '^TNX': 'Nominal_Yield',
+            'BTC-USD': 'BTC',
+            'GLD': 'Gold'
+        }
+        
+        # 只保留存在的列，并重命名
+        data = data[[col for col in col_map.keys() if col in available_cols]]
+        data.rename(columns=col_map, inplace=True)
+        
+        # 如果缺少关键列，给出警告
+        if 'DXY' not in data.columns:
+            st.warning("⚠️ 未找到 DXY 数据，尝试使用 UUP 替代...")
+            # 可选：备用方案
         
         # 数据清洗：删除全为空的行
         data = data.dropna(how='all')
