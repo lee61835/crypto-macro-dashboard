@@ -111,26 +111,79 @@ if df is not None and not df.empty:
     with tab1:
         col_a, col_b = st.columns([2, 1])
         
-        with col_a:
-            st.subheader("BTC 价格 vs 宏观压力分数")
+               with col_a:
+            st.subheader("BTC 价格 vs 宏观压力分数 (红=紧缩/利空，绿=宽松/利好)")
             fig_main = go.Figure()
             
-            # BTC 价格 (右轴)
-            fig_main.add_trace(go.Scatter(x=df.index, y=df['BTC'], name='BTC Price', line=dict(color='#F7931A', width=2), yaxis="y2"))
+            # 1. BTC 价格 (右轴) - 保持橙色折线
+            fig_main.add_trace(
+                go.Scatter(
+                    x=df.index, 
+                    y=df['BTC'], 
+                    name='BTC 价格', 
+                    line=dict(color='#F7931A', width=2.5), # 线条加粗一点
+                    yaxis="y2",
+                    opacity=0.9
+                )
+            )
             
-            # 压力分数 (左轴，柱状图)
+            # 2. 压力分数 (左轴，柱状图) - 【核心修改在这里】
             colors = ['red' if x > 0 else 'green' if x < 0 else 'gray' for x in df['Stress_Score']]
-            fig_main.add_trace(go.Bar(x=df.index, y=df['Stress_Score'], name='Stress Score', marker_color=colors, opacity=0.5))
+            
+            fig_main.add_trace(
+                go.Bar(
+                    x=df.index, 
+                    y=df['Stress_Score'], 
+                    name='宏观压力', 
+                    marker_color=colors,       # 🔥 强制红绿颜色
+                    opacity=0.9,               # 🔥 提高不透明度，让颜色更实、更鲜艳
+                    width=0.8,                 # 🔥 加宽柱子，像成交量一样饱满
+                    hovertemplate='压力分数: %{y:.2f}<extra></extra>'
+                )
+            )
+            
+            # 3. 添加 0 轴参考线
+            fig_main.add_hline(
+                y=0, 
+                line_dash="dash", 
+                line_color="white", 
+                line_width=1, 
+                annotation_text="中性分界线", 
+                annotation_position="top right",
+                annotation_font_color="gray"
+            )
+
+            # 【关键修改】动态计算 Y 轴范围，让柱子“顶天立地”
+            min_score = df['Stress_Score'].min()
+            max_score = df['Stress_Score'].max()
+            
+            # 如果最大值小于1，至少显示到1，避免太扁；否则上下留白 20%
+            y_min = min(min_score * 1.2, -1) if min_score < 0 else -1
+            y_max = max(max_score * 1.2, 1) if max_score > 0 else 1
             
             fig_main.update_layout(
-                height=500,
+                height=600,                  # 🔥 增加图表高度
                 hovermode='x unified',
-                yaxis=dict(title="压力分数", range=[-3, 3]),
-                yaxis2=dict(title="BTC 价格", overlaying="y", side="right"),
-                legend=dict(orientation="h", y=1.1)
+                bargap=0.1,                  # 🔥 减小柱子间隙
+                xaxis_rangeslider_visible=False, # 隐藏下方滑块，界面更清爽
+                legend=dict(orientation="h", y=1.05, x=0),
+                title_font_size=20,
+                yaxis=dict(
+                    title="宏观压力分数", 
+                    range=[y_min, y_max],    # 🔥 使用动态范围，不再强制固定 -3 到 3
+                    gridcolor='rgba(255,255,255,0.1)'
+                ),
+                yaxis2=dict(
+                    title="BTC 价格 (USD)", 
+                    overlaying="y", 
+                    side="right",
+                    gridcolor='rgba(255,255,255,0.1)'
+                ),
+                plot_bgcolor='rgba(0,0,0,0)', # 背景透明（如果是深色主题）
+                paper_bgcolor='rgba(0,0,0,0)'
             )
+            
             st.plotly_chart(fig_main, use_container_width=True)
-
         with col_b:
             st.subheader("🚨 最新信号解读")
             if latest['Stress_Score'] >= 2:
