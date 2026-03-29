@@ -1,211 +1,106 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-import plotly.graph_objects as go
+import ccxt
+import time
 from datetime import datetime
 
-# 页面配置
-st.set_page_config(page_title="Crypto 宏观流动性驾驶舱", layout="wide", page_icon="🌍")
+# --- 初始化交易所 (无需 API Key 即可获取公开行情) ---
+binance = ccxt.binance({'options': {'defaultType': 'future'}}) # 币安合约
+binance_spot = ccxt.binance({'options': {'defaultType': 'spot'}}) # 币安现货
+coinbase = ccxt.coinbase() # Coinbase 现货
 
-st.title("🌍 Crypto 宏观流动性与风险预警系统")
-st.markdown("""
-> **数据来源**: Yahoo Finance (DXY, 美债, BTC) + FRED (通过代理逻辑模拟，确保云端稳定性)  
-> **更新频率**: 每次刷新页面时自动获取最新数据  
-> **无需安装**: 纯云端运行
-""")
-
-# 侧边栏
-st.sidebar.header("控制面板")
-refresh = st.sidebar.button("🔄 强制刷新数据")
-st.sidebar.info("💡 提示：宏观数据（如美联储资产负债表）通常每周更新，市场数据实时变动。")
-
-# 缓存数据获取函数 (提高加载速度)
-@st.cache_data(ttl=3600)
-def get_data():
+def fetch_hardcore_data():
     try:
-        # 1. 获取市场数据 (Yahoo Finance)
-        tickers = ["DX-Y.NYB", "^TNX", "BTC-USD", "GLD"] 
-        data = yf.download(tickers, period="2y", interval="1d", progress=False)['Close']
+        # 1. 抓取价格数据
+        b_spot = binance_spot.fetch_ticker('BTC/USDT')
+        b_future = binance.fetch_ticker('BTC/USDT')
+        cb_spot = coinbase.fetch_ticker('BTC/USD')
         
-        # 重命名列
-        available_cols = data.columns.tolist()
+        # 2. 抓取持仓量 (Open Interest)
+        # 使用币安 fapi 接口获取实时持仓
+        oi_resp = binance.fapiPublicGetOpenInterest({'symbol': 'BTCUSDT'})
+        oi_value = float(oi_resp['openInterest'])
         
-        col_map = {
-            'DX-Y.NYB': 'DXY',
-            '^TNX': 'Nominal_Yield',
-            'BTC-USD': 'BTC',
-            'GLD': 'Gold'
+        # 3. 抓取 24h 成交量
+        vol_spot = float(b_spot['quoteVolume'])
+        vol_future = float(b_future['quoteVolume'])
+        
+        return {
+            "s_price": b_spot['close'],
+            "f_price": b_future['close'],
+            "cb_price": cb_spot['close'],
+            "oi": oi_value,
+            "s_vol": vol_spot,
+            "f_vol": vol_future,
+            "timestamp": datetime.now().strftime("%H:%M:%S")
         }
-        
-        # 只保留存在的列，并重命名
-        data = data[[col for col in col_map.keys() if col in available_cols]]
-        data.rename(columns=col_map, inplace=True)
-        
-        # 如果缺少关键列，给出警告
-        if 'DXY' not in data.columns:
-            st.warning("⚠️ 未找到 DXY 数据，尝试使用 UUP 替代...")
-        
-        # 数据清洗
-        data = data.dropna(how='all')
-        data = data.ffill()
-        
-        # 2. 计算变化率
-        data['DXY_Change'] = data['DXY'].pct_change()
-        data['Yield_Change'] = data['Nominal_Yield'].pct_change()
-        
-        # 3. 构建压力分数
-        data['Score_DXY'] = data['DXY_Change'].apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
-        data['Score_Yield'] = data['Yield_Change'].apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
-        
-        data['Stress_Score'] = data['Score_DXY'] + data['Score_Yield']
-        
-        # 4. 计算相关性 (滚动 60 天)
-        data['Corr_DXY'] = data['BTC'].rolling(60).corr(data['DXY'])
-        data['Corr_Yield'] = data['BTC'].rolling(60).corr(data['Nominal_Yield'])
-        
-        return data
     except Exception as e:
-        st.error(f"数据加载失败：{e}")
+        st.error(f"数据抓取失败: {e}")
         return None
 
-# 主逻辑
-df = get_data()
+# --- Streamlit 页面配置 ---
+st.set_page_config(page_title="BTC 硬核监控站", layout="wide")
+st.title("🛡️ BTC 全网资金压力实时仪表盘")
+st.caption("数据源: Binance API & Coinbase API | 每 10 秒自动刷新")
 
-if df is not None and not df.empty:
-    # --- 顶部关键指标 ---
+# 侧边栏设置
+refresh_rate = st.sidebar.slider("刷新频率 (秒)", 5, 60, 10)
+
+# --- 核心逻辑运行 ---
+data = fetch_hardcore_data()
+
+if data:
+    # 指标 1: 基差 (Basis)
+    basis_pct = (data['f_price'] - data['s_price']) / data['s_price'] * 100
+    
+    # 指标 2: 赌场系数 (Spot/Future Ratio)
+    casino_ratio = data['f_vol'] / data['s_vol']
+    
+    # 指标 3: Coinbase 溢价 (美资动力)
+    cb_premium = (data['cb_price'] - data['s_price']) / data['s_price'] * 100
+
+    # --- UI 展示 ---
     col1, col2, col3, col4 = st.columns(4)
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
     
     with col1:
-        st.metric("BTC 价格", f"${latest['BTC']:,.2f}", f"{(latest['BTC']-prev['BTC'])/prev['BTC']*100:.2f}%")
+        st.metric("合约价格", f"${data['f_price']:,}")
+        st.metric("现货价格", f"${data['s_price']:,}")
+        
     with col2:
-        st.metric("美元指数 (DXY)", f"{latest['DXY']:.2f}", f"{(latest['DXY']-prev['DXY'])/prev['DXY']*100:.2f}%", delta_color="inverse")
+        st.metric("基差率 (Basis %)", f"{basis_pct:.4f}%", 
+                  delta="多头过热" if basis_pct > 0.1 else "正常", delta_color="inverse")
+        st.caption("物理意义: 合约比现货贵多少")
+
     with col3:
-        st.metric("10Y 美债收益率", f"{latest['Nominal_Yield']:.2f}%", f"{(latest['Nominal_Yield']-prev['Nominal_Yield']):.2f}bp", delta_color="inverse")
+        st.metric("赌场系数 (合约/现货)", f"{casino_ratio:.1f}x",
+                  delta="风险极高" if casino_ratio > 15 else "安全", delta_color="inverse")
+        st.caption("物理意义: 杠杆资金是现货的几倍")
+
     with col4:
-        stress = latest['Stress_Score']
-        status = "🔴 高压" if stress > 0 else "🟢 宽松" if stress < 0 else "⚪ 中性"
-        st.metric("宏观压力状态", status)
+        st.metric("CB 溢价 (美资)", f"{cb_premium:.4f}%",
+                  delta="机构买入" if cb_premium > 0 else "机构抛售")
+        st.caption("物理意义: 华尔街/ETF 的入场意愿")
 
     st.divider()
 
-    # --- 图表区域 ---
-    tab1, tab2, tab3 = st.tabs(["📊 压力指数与价格", "🔗 相关性分析", "📉 详细数据表"])
+    # --- 风险诊断 ---
+    st.subheader("⚠️ 实时风险诊断报告")
+    c_left, c_right = st.columns(2)
+    
+    with c_left:
+        if casino_ratio > 20:
+            st.error(f"【高危】当前赌场系数为 {casino_ratio:.1f}。杠杆资金严重过载，极易发生双边爆仓！")
+        elif basis_pct > 0.15:
+            st.warning("【警报】基差过大。套利资金可能随时入场抹平价差，注意多头踩踏。")
+        else:
+            st.success("市场资金结构目前相对健康。")
+            
+    with c_right:
+        if cb_premium < -0.05:
+            st.error("【趋势风险】Coinbase 出现显著折价。美资机构正在撤退，即便价格在涨也是‘假突破’。")
+        elif cb_premium > 0.05:
+            st.success("【动力强劲】美资溢价中。这一轮上涨由机构现货买盘驱动，支撑力强。")
 
-    with tab1:
-        col_a, col_b = st.columns([2, 1])
-        
-        with col_a:
-            st.subheader("BTC 价格 vs 宏观压力分数 (密集模式)")
-            fig_main = go.Figure()
-            
-            # BTC 价格 (右轴) - 保持橙色线条
-            fig_main.add_trace(
-                go.Scatter(
-                    x=df.index, 
-                    y=df['BTC'], 
-                    name='BTC 价格', 
-                    line=dict(color='#F7931A', width=2), 
-                    yaxis="y2",
-                    opacity=0.9
-                )
-            )
-            
-            # 压力分数 (左轴，柱状图) - 【核心修改：密集成交量风格】
-            colors = ['red' if x > 0 else 'green' if x < 0 else 'gray' for x in df['Stress_Score']]
-            
-            fig_main.add_trace(
-                go.Bar(
-                    x=df.index, 
-                    y=df['Stress_Score'], 
-                    name='宏观压力', 
-                    marker_color=colors,       
-                    opacity=1.0,               # 完全不透明，颜色更实
-                    width=0.8,                 # 柱子宽度固定，配合 bargap=0 实现紧密排列
-                    hovertemplate='压力分数: %{y:.2f}<extra></extra>'
-                )
-            )
-            
-            # 添加 0 轴参考线 (虚线)
-            fig_main.add_hline(
-                y=0, 
-                line_dash="dash", 
-                line_color="white", 
-                line_width=1, 
-                annotation_text="中性分界线", 
-                annotation_position="top right",
-                annotation_font_color="gray"
-            )
-
-            # 动态计算 Y 轴范围
-            min_score = df['Stress_Score'].min()
-            max_score = df['Stress_Score'].max()
-            
-            # 让 Y 轴稍微留一点白边，但不要太多，让柱子看起来顶格
-            y_min = min(min_score * 1.1, -0.5) if min_score < 0 else -0.5
-            y_max = max(max_score * 1.1, 0.5) if max_score > 0 else 0.5
-            
-            fig_main.update_layout(
-                height=500,                  # 高度适中
-                hovermode='x unified',
-                bargap=0,                    # 🔥 关键：柱子间隙为 0，实现紧密排列
-                xaxis_rangeslider_visible=False, 
-                legend=dict(orientation="h", y=1.05, x=0),
-                title_font_size=18,
-                yaxis=dict(
-                    title="压力分数", 
-                    range=[y_min, y_max],    # 动态范围
-                    gridcolor='rgba(255,255,255,0.1)',
-                    showticklabels=False     # 隐藏左侧数字，让界面更像专业看盘软件
-                ),
-                yaxis2=dict(
-                    title="BTC 价格", 
-                    overlaying="y", 
-                    side="right",
-                    gridcolor='rgba(255,255,255,0.1)'
-                ),
-                plot_bgcolor='rgba(0,0,0,0)', 
-                paper_bgcolor='rgba(0,0,0,0)',
-                margin=dict(l=0, r=0, t=40, b=0) # 减少左右边距，让柱子占满屏幕
-            )
-            
-            st.plotly_chart(fig_main, use_container_width=True)
-
-        with col_b:
-            st.subheader("🚨 最新信号解读")
-            current_latest = df.iloc[-1] 
-            
-            if current_latest['Stress_Score'] >= 2:
-                st.error("**极度危险**: 美元与利率双升，资金大幅回流美国，加密资产承压极大。建议减仓或对冲。")
-            elif current_latest['Stress_Score'] <= -2:
-                st.success("**黄金机会**: 美元与利率双降，流动性溢出，风险资产有望反弹。")
-            elif current_latest['Stress_Score'] > 0:
-                st.warning("**谨慎观望**: 宏观环境偏紧，不宜激进做多。")
-            else:
-                st.info("**环境温和**: 宏观因素无明显方向，关注技术面。")
-            
-            st.markdown("---")
-            st.markdown(f"**DXY 趋势**: {'上涨 📈' if current_latest['Score_DXY']>0 else '下跌 📉'}")
-            st.markdown(f"**利率 趋势**: {'上升 🔼' if current_latest['Score_Yield']>0 else '下降 🔽'}")
-
-    with tab2:
-        st.subheader("BTC 与宏观因子滚动相关性 (60天)")
-        fig_corr = go.Figure()
-        fig_corr.add_trace(go.Scatter(x=df.index, y=df['Corr_DXY'], name='BTC vs DXY', line=dict(color='red')))
-        fig_corr.add_trace(go.Scatter(x=df.index, y=df['Corr_Yield'], name='BTC vs Yields', line=dict(color='blue')))
-        fig_corr.add_hline(y=0, line_dash="dot", line_color="gray")
-        fig_corr.update_layout(height=400, yaxis_title="相关系数 (-1 到 1)")
-        st.plotly_chart(fig_corr, use_container_width=True)
-        st.caption("相关系数接近 -1 表示强负相关（正常情况），接近 1 表示异常正相关。")
-
-    with tab3:
-        st.subheader("原始数据预览 (最近 30 天)")
-        st.dataframe(df.tail(30)[['BTC', 'DXY', 'Nominal_Yield', 'Stress_Score']].sort_index(ascending=False), use_container_width=True)
-
-else:
-    st.warning("正在加载数据或数据暂时不可用，请稍后刷新。")
-
-# 页脚
-st.markdown("---")
-st.caption("数据由 Yahoo Finance 提供 | 仅供研究参考，不构成投资建议")
+    # 自动刷新逻辑
+    time.sleep(refresh_rate)
+    st.rerun()
